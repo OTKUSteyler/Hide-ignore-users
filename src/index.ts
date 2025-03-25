@@ -1,51 +1,30 @@
-import { logger } from "@vendetta";
-import { findByName, findByProps } from "@vendetta/metro";
-import { after, before } from "@vendetta/patcher";
+import { after } from "@vendetta/patcher";
+import { findByProps } from "@vendetta/metro";
 
-let patches = [];
+// Get the message rendering function
+const Messages = findByProps("getMessages", "sendMessage");
 
-export default {
-  onLoad() {
-    // Find necessary modules
-    const MessageModule = findByName("Message");
-    const RelationshipModule = findByProps("isIgnored");
-
-    // Patch message rendering to hide messages from ignored users
-    const messagePatch = before("type", MessageModule, (args) => {
-      try {
-        const message = args[0];
-        // Hide message if author is ignored
-        if (RelationshipModule.isIgnored(message.author.id)) {
-          return [null];
-        }
-      } catch (e) {
-        logger.error("Failed to hide ignored user message", e);
-      }
+// Function to hide messages from ignored users
+const patch = after("getMessages", Messages, (args, messages) => {
+    return messages.filter(msg => {
+        const userId = msg.author.id;
+        return !isUserIgnored(userId);
     });
+});
 
-    // Patch DM channel list to remove channels with ignored users
-    const ChannelModule = findByProps("getPrivateChannels");
-    
-    const channelPatch = before("getPrivateChannels", ChannelModule, (args) => {
-      try {
-        const channels = args[0];
-        // Filter out channels with ignored users
-        return [channels.filter(channel => {
-          const recipientId = channel.recipients[0];
-          return !RelationshipModule.isIgnored(recipientId);
-        })];
-      } catch (e) {
-        logger.error("Failed to filter DM channels", e);
-      }
-    });
+// Function to check if a user is ignored
+function isUserIgnored(userId) {
+    const ignoredUsers = getIgnoredUsers(); // Fetch ignored users list
+    return ignoredUsers.includes(userId);
+}
 
-    // Store patches for unloading
-    patches = [messagePatch, channelPatch];
-  },
+// Fetch ignored users list (this may need adjustments based on Vendetta's API)
+function getIgnoredUsers() {
+    const Settings = findByProps("getIgnoredUsers");
+    return Settings?.getIgnoredUsers() || [];
+}
 
-  onUnload() {
-    // Remove all patches
-    patches.forEach(patch => patch());
-    patches = [];
-  }
-};
+// Cleanup function
+export function onUnload() {
+    patch();
+}
