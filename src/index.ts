@@ -1,69 +1,51 @@
-import { Plugin } from '@vizality/entities';
-import { patch, unpatch } from '@vizality/patcher';
-import { getModule } from '@vizality/webpack';
+import { logger } from "@vendetta";
+import { findByName, findByProps } from "@vendetta/metro";
+import { after, before } from "@vendetta/patcher";
 
-export default class HideIgnoredUsersPlugin extends Plugin {
-  constructor() {
-    super();
-  }
+let patches = [];
 
-  start() {
-    // Patch chat message rendering
-    this.patchChatMessages();
-    
-    // Patch direct message channel list
-    this.patchDMChannels();
-  }
+export default {
+  onLoad() {
+    // Find necessary modules
+    const MessageModule = findByName("Message");
+    const RelationshipModule = findByProps("isIgnored");
 
-  stop() {
-    // Unpatch all modifications when plugin is disabled
-    unpatch('hide-ignored-users-chat');
-    unpatch('hide-ignored-users-dm');
-  }
-
-  patchChatMessages() {
-    const MessageModule = getModule(m => m.type?.displayName === 'Message');
-    
-    patch('hide-ignored-users-chat', MessageModule, 'type', (args, res) => {
-      const message = args[0];
-      
-      // Check if the user is ignored
-      if (this.isUserIgnored(message.author.id)) {
-        // Return null to hide the message
-        return null;
+    // Patch message rendering to hide messages from ignored users
+    const messagePatch = before("type", MessageModule, (args) => {
+      try {
+        const message = args[0];
+        // Hide message if author is ignored
+        if (RelationshipModule.isIgnored(message.author.id)) {
+          return [null];
+        }
+      } catch (e) {
+        logger.error("Failed to hide ignored user message", e);
       }
-      
-      return res;
     });
-  }
 
-  patchDMChannels() {
-    const DMChannelModule = getModule(m => m.getPrivateChannels);
+    // Patch DM channel list to remove channels with ignored users
+    const ChannelModule = findByProps("getPrivateChannels");
     
-    patch('hide-ignored-users-dm', DMChannelModule, 'getPrivateChannels', (args, channels) => {
-      // Filter out DM channels with ignored users
-      return channels.filter(channel => {
-        const recipientId = channel.recipients[0];
-        return !this.isUserIgnored(recipientId);
-      });
+    const channelPatch = before("getPrivateChannels", ChannelModule, (args) => {
+      try {
+        const channels = args[0];
+        // Filter out channels with ignored users
+        return [channels.filter(channel => {
+          const recipientId = channel.recipients[0];
+          return !RelationshipModule.isIgnored(recipientId);
+        })];
+      } catch (e) {
+        logger.error("Failed to filter DM channels", e);
+      }
     });
-  }
 
-  isUserIgnored(userId) {
-    // Get the user relationship module
-    const RelationshipModule = getModule(m => m.getName && m.isBlocked);
-    
-    // Check if the user is blocked/ignored
-    return RelationshipModule.isBlocked(userId);
-  }
+    // Store patches for unloading
+    patches = [messagePatch, channelPatch];
+  },
 
-  // Optional: Add settings to configure plugin behavior
-  getSettingsPanel() {
-    return (
-      <div>
-        <h2>Hide Ignored Users Plugin</h2>
-        <p>Automatically hides messages and DM channels from ignored users.</p>
-      </div>
-    );
+  onUnload() {
+    // Remove all patches
+    patches.forEach(patch => patch());
+    patches = [];
   }
-}
+};
