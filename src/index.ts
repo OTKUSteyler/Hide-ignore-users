@@ -1,30 +1,38 @@
 import { after } from "@vendetta/patcher";
 import { findByProps } from "@vendetta/metro";
 
-// Get the message rendering function
-const Messages = findByProps("getMessages", "sendMessage");
+// Get the function responsible for rendering messages
+const MessageRender = findByProps("renderMessage");
 
-// Function to hide messages from ignored users
-const patch = after("getMessages", Messages, (args, messages) => {
-    return messages.filter(msg => {
-        const userId = msg.author.id;
-        return !isUserIgnored(userId);
+let patch;
+
+export function onLoad() {
+    console.log("[HideIgnoredMessages] Plugin Loaded");
+
+    patch = after("renderMessage", MessageRender, (args, render) => {
+        const message = args[0]?.message;
+        if (!message) return render;
+
+        const userId = message.author?.id;
+        if (isUserIgnored(userId)) {
+            console.log(`[HideIgnoredMessages] Hiding message from ignored user ${userId}`);
+            return null; // Hide the message
+        }
+        
+        return render;
     });
-});
+}
+
+export function onUnload() {
+    console.log("[HideIgnoredMessages] Plugin Unloaded");
+    if (patch) patch();
+}
 
 // Function to check if a user is ignored
 function isUserIgnored(userId) {
-    const ignoredUsers = getIgnoredUsers(); // Fetch ignored users list
-    return ignoredUsers.includes(userId);
-}
-
-// Fetch ignored users list (this may need adjustments based on Vendetta's API)
-function getIgnoredUsers() {
     const Settings = findByProps("getIgnoredUsers");
-    return Settings?.getIgnoredUsers() || [];
-}
+    const ignoredUsers = Settings?.getIgnoredUsers?.() || [];
+    console.log("[HideIgnoredMessages] Ignored users list:", ignoredUsers);
 
-// Cleanup function
-export function onUnload() {
-    patch();
+    return ignoredUsers.includes(userId);
 }
