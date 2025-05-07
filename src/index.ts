@@ -43,7 +43,7 @@ function constructMessage(message, channel ) {
 
 // Function to check blocked users
 const isBlocked = (id) => {
-    return RelationshipStore.isBlocked(id);
+    return RelationshipStore.isIgnored(id);
 };
 
 let patches = [];
