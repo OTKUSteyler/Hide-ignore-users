@@ -5,7 +5,7 @@ import { logger } from "@vendetta"
 
 const RowManager = findByName("RowManager");
 
-const RelationshipStore = findByProps("RelationshipStore.isIgnored", "isBlocked");
+const RelationshipStore = findByProps("RelationshipStore", "isBlocked");
 const pluginName = "HideignoredMessages";
   
 function constructMessage(message, channel ) {
