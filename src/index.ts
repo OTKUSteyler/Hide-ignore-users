@@ -1,14 +1,18 @@
 import { FluxDispatcher } from '@vendetta/metro/common';
-import { before, } from "@vendetta/patcher"
-import { findByProps, findByName } from "@vendetta/metro"
-import { logger } from "@vendetta"
+import { before } from "@vendetta/patcher";
+import { findByProps, findByName } from "@vendetta/metro";
+import { logger } from "@vendetta";
 
+const pluginName = "HideIgnoredMessages";
 const RowManager = findByName("RowManager");
+const RelationshipStore = findByProps("isIgnoredUser");
 
-const RelationshipStore = findByProps("RelationshipStore", "isBlocked");
-const pluginName = "HideignoredMessages";
-  
-function constructMessage(message, channel ) {
+let patches = [];
+
+const isIgnored = (id) => RelationshipStore.isIgnoredUser?.(id);
+
+// Create a dummy message to trigger handlers on load
+function constructMessage(message, channel) {
     let msg = {
         id: '',
         type: 0,
@@ -39,98 +43,71 @@ function constructMessage(message, channel ) {
     else msg = { ...msg, ...message };
 
     return msg;
-};
-
-// Function to check blocked users
-const isBlocked = (id) => {
-    return RelationshipStore.isIgnored(id);
-};
-
-let patches = [];
+}
 
 const startPlugin = () => {
     try {
-        // Main patch
-        const patch1 = (
-            before("dispatch", FluxDispatcher, ([event]) => {
-                // Hides blocked messages on channel loads
-                if (event.type === "LOAD_MESSAGES_SUCCESS") {
-                    event.messages = event.messages.filter((message) => { 
-                        return (!isBlocked(message?.author?.id));
-                    });
-                }
-                // Hides blocked messages on message creation/update
-                if (event.type === "MESSAGE_CREATE" || event.type === "MESSAGE_UPDATE") {
-                    let message = event.message;
+        // Patch message events
+        const patch1 = before("dispatch", FluxDispatcher, ([event]) => {
+            if (event.type === "LOAD_MESSAGES_SUCCESS") {
+                event.messages = event.messages.filter(
+                    (message) => !isIgnored(message?.author?.id)
+                );
+            }
 
-                    if (isBlocked(message?.author?.id)) {
-                        // Drop event
-                        event.channelId = "0"
-                    };
+            if (event.type === "MESSAGE_CREATE" || event.type === "MESSAGE_UPDATE") {
+                const message = event.message;
+                if (isIgnored(message?.author?.id)) {
+                    event.channelId = "0"; // Prevent it from appearing
                 }
-            })
-        );
+            }
+        });
         patches.push(patch1);
 
-        // Fallback patch to mostly remove blocked message rows if main patch doesn't work on first load
-        const patch2 = (
-            before("generate", RowManager.prototype, ([data]) => {
-                if (isBlocked(data.message?.author?.id)) {
-                    data.renderContentOnly = true
-                    data.message.content = null
-                    data.message.reactions = []
-                    data.message.canShowComponents= false
-                    if (data.rowType === 2) {
-                        data.roleStyle = ""
-                        data.text = "[Temp] Blocked message. Reloading should fix."
-                        data.revealed = false
-                        data.content = []
-                    }
+        // UI fallback patch for message rows
+        const patch2 = before("generate", RowManager.prototype, ([data]) => {
+            if (isIgnored(data.message?.author?.id)) {
+                data.renderContentOnly = true;
+                data.message.content = null;
+                data.message.reactions = [];
+                data.message.canShowComponents = false;
+
+                if (data.rowType === 2) {
+                    data.roleStyle = "";
+                    data.text = "[Temp] Ignored message. Reloading should fix.";
+                    data.revealed = false;
+                    data.content = [];
                 }
-            })
-        );
+            }
+        });
         patches.push(patch2);
 
         logger.log(`${pluginName} loaded.`);
-        return null;
     } catch (err) {
-        logger.log(`[${pluginName} Error]`, err);
-    };
-}
+        logger.error(`[${pluginName} Error]`, err);
+    }
+};
 
-// Load Plugin
-const onLoad = () => {
+export const onLoad = () => {
     logger.log(`Loading ${pluginName}...`);
 
-    // Dispatch with a fake event to enable the action handlers from first loadup
-    for (let type of ["MESSAGE_CREATE", "MESSAGE_UPDATE"]) {
-        logger.log(`Dispatching ${type} to enable action handler.`);
+    // Dispatch fake events to initialize dispatcher paths
+    for (const type of ["MESSAGE_CREATE", "MESSAGE_UPDATE"]) {
         FluxDispatcher.dispatch({
-            type: type,
-            message: constructMessage('PLACEHOLDER', { id: '0' }),
+            type,
+            message: constructMessage("PLACEHOLDER", { id: "0" }),
         });
-    };
+    }
 
-    // Dispatch with a fake event to enable the action handlers from first loadup
-    for (let type of ["LOAD_MESSAGES", "LOAD_MESSAGES_SUCCESS"]) {
-        logger.log(`Dispatching ${type} to enable action handler.`);
-        FluxDispatcher.dispatch({
-            type: type,
-            messages: [],
-        });
-    };
+    for (const type of ["LOAD_MESSAGES", "LOAD_MESSAGES_SUCCESS"]) {
+        FluxDispatcher.dispatch({ type, messages: [] });
+    }
 
-    // Begin patch sequence
     startPlugin();
 };
 
-export default {
-    onLoad,
-    onUnload: () => {
-        logger.log(`Unloading ${pluginName}...`);
-        for (let unpatch of patches) {
-            unpatch();
-        };
-        logger.log(`${pluginName} unloaded.`);
-    }
+export const onUnload = () => {
+    logger.log(`Unloading ${pluginName}...`);
+    for (const unpatch of patches) unpatch();
+    logger.log(`${pluginName} unloaded.`);
 };
