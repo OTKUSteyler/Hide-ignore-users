@@ -3,15 +3,18 @@ import { before } from "@vendetta/patcher";
 import { findByProps, findByName } from "@vendetta/metro";
 import { logger } from "@vendetta";
 
-const pluginName = "HideIgnoredMessages";
 const RowManager = findByName("RowManager");
+
+// Look for the store with the 'isIgnoredUser' method
 const RelationshipStore = findByProps("isIgnoredUser");
+const pluginName = "HideIgnoredMessages";
 
-let patches = [];
+// Fallback in case the store doesn't load
+if (!RelationshipStore?.isIgnoredUser) {
+    logger.error(`[${pluginName}] Could not find isIgnoredUser in RelationshipStore`);
+}
 
-const isIgnored = (id) => RelationshipStore.isIgnoredUser?.(id);
-
-// Create a dummy message to trigger handlers on load
+// Function to construct a dummy message
 function constructMessage(message, channel) {
     let msg = {
         id: '',
@@ -45,33 +48,39 @@ function constructMessage(message, channel) {
     return msg;
 }
 
+// Function to check ignored users
+const isIgnored = (id) => {
+    return RelationshipStore?.isIgnoredUser?.(id);
+};
+
+let patches = [];
+
 const startPlugin = () => {
     try {
-        // Patch message events
+        // Main patch
         const patch1 = before("dispatch", FluxDispatcher, ([event]) => {
             if (event.type === "LOAD_MESSAGES_SUCCESS") {
-                event.messages = event.messages.filter(
-                    (message) => !isIgnored(message?.author?.id)
-                );
+                event.messages = event.messages.filter((message) => {
+                    return !isIgnored(message?.author?.id);
+                });
             }
 
             if (event.type === "MESSAGE_CREATE" || event.type === "MESSAGE_UPDATE") {
                 const message = event.message;
                 if (isIgnored(message?.author?.id)) {
-                    event.channelId = "0"; // Prevent it from appearing
+                    event.channelId = "0"; // drop event
                 }
             }
         });
         patches.push(patch1);
 
-        // UI fallback patch for message rows
+        // UI row filter fallback
         const patch2 = before("generate", RowManager.prototype, ([data]) => {
             if (isIgnored(data.message?.author?.id)) {
                 data.renderContentOnly = true;
                 data.message.content = null;
                 data.message.reactions = [];
                 data.message.canShowComponents = false;
-
                 if (data.rowType === 2) {
                     data.roleStyle = "";
                     data.text = "[Temp] Ignored message. Reloading should fix.";
@@ -88,26 +97,36 @@ const startPlugin = () => {
     }
 };
 
-export const onLoad = () => {
+const onLoad = () => {
     logger.log(`Loading ${pluginName}...`);
 
-    // Dispatch fake events to initialize dispatcher paths
-    for (const type of ["MESSAGE_CREATE", "MESSAGE_UPDATE"]) {
+    // Trigger dispatcher readiness
+    for (let type of ["MESSAGE_CREATE", "MESSAGE_UPDATE"]) {
+        logger.log(`Dispatching ${type} to enable action handler.`);
         FluxDispatcher.dispatch({
-            type,
-            message: constructMessage("PLACEHOLDER", { id: "0" }),
+            type: type,
+            message: constructMessage('PLACEHOLDER', { id: '0' }),
         });
     }
 
-    for (const type of ["LOAD_MESSAGES", "LOAD_MESSAGES_SUCCESS"]) {
-        FluxDispatcher.dispatch({ type, messages: [] });
+    for (let type of ["LOAD_MESSAGES", "LOAD_MESSAGES_SUCCESS"]) {
+        logger.log(`Dispatching ${type} to enable action handler.`);
+        FluxDispatcher.dispatch({
+            type: type,
+            messages: [],
+        });
     }
 
     startPlugin();
 };
 
-export const onUnload = () => {
-    logger.log(`Unloading ${pluginName}...`);
-    for (const unpatch of patches) unpatch();
-    logger.log(`${pluginName} unloaded.`);
+export default {
+    onLoad,
+    onUnload: () => {
+        logger.log(`Unloading ${pluginName}...`);
+        for (let unpatch of patches) {
+            unpatch();
+        }
+        logger.log(`${pluginName} unloaded.`);
+    }
 };
