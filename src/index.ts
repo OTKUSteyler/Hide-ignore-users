@@ -4,17 +4,15 @@ import { findByProps, findByName } from "@vendetta/metro";
 import { logger } from "@vendetta";
 
 const RowManager = findByName("RowManager");
+const GroupedMessage = findByProps("renderIgnoredMessages");
 
-// Look for the store with the 'isIgnoredUser' method
 const RelationshipStore = findByProps("isIgnoredUser");
 const pluginName = "HideIgnoredMessages";
 
-// Fallback in case the store doesn't load
 if (!RelationshipStore?.isIgnoredUser) {
     logger.error(`[${pluginName}] Could not find isIgnoredUser in RelationshipStore`);
 }
 
-// Function to construct a dummy message
 function constructMessage(message, channel) {
     let msg = {
         id: '',
@@ -48,7 +46,6 @@ function constructMessage(message, channel) {
     return msg;
 }
 
-// Function to check ignored users
 const isIgnored = (id) => {
     return RelationshipStore?.isIgnoredUser?.(id);
 };
@@ -57,7 +54,6 @@ let patches = [];
 
 const startPlugin = () => {
     try {
-        // Main patch
         const patch1 = before("dispatch", FluxDispatcher, ([event]) => {
             if (event.type === "LOAD_MESSAGES_SUCCESS") {
                 event.messages = event.messages.filter((message) => {
@@ -68,13 +64,12 @@ const startPlugin = () => {
             if (event.type === "MESSAGE_CREATE" || event.type === "MESSAGE_UPDATE") {
                 const message = event.message;
                 if (isIgnored(message?.author?.id)) {
-                    event.channelId = "0"; // drop event
+                    event.channelId = "0";
                 }
             }
         });
         patches.push(patch1);
 
-        // UI row filter fallback
         const patch2 = before("generate", RowManager.prototype, ([data]) => {
             if (isIgnored(data.message?.author?.id)) {
                 data.renderContentOnly = true;
@@ -91,6 +86,16 @@ const startPlugin = () => {
         });
         patches.push(patch2);
 
+        // This removes "X ignored messages" UI blocks
+        const patch3 = before("renderIgnoredMessages", GroupedMessage, ([messages]) => {
+            if (Array.isArray(messages)) {
+                const filtered = messages.filter(msg => !isIgnored(msg?.author?.id));
+                if (filtered.length === 0) return [filtered]; // suppress full group
+                return [filtered]; // allow if some non-ignored messages remain
+            }
+        });
+        patches.push(patch3);
+
         logger.log(`${pluginName} loaded.`);
     } catch (err) {
         logger.error(`[${pluginName} Error]`, err);
@@ -100,7 +105,6 @@ const startPlugin = () => {
 const onLoad = () => {
     logger.log(`Loading ${pluginName}...`);
 
-    // Trigger dispatcher readiness
     for (let type of ["MESSAGE_CREATE", "MESSAGE_UPDATE"]) {
         logger.log(`Dispatching ${type} to enable action handler.`);
         FluxDispatcher.dispatch({
@@ -124,9 +128,7 @@ export default {
     onLoad,
     onUnload: () => {
         logger.log(`Unloading ${pluginName}...`);
-        for (let unpatch of patches) {
-            unpatch();
-        }
+        for (let unpatch of patches) unpatch();
         logger.log(`${pluginName} unloaded.`);
     }
 };
